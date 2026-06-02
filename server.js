@@ -78,7 +78,7 @@ cron.schedule('* * * * *', async () => {
     try {
       const msg = buildMessage(r, date);
       await sendWhatsApp(r.phone, msg);
-      db.markSent(r.id);
+      db.markSent(r._key);
       console.log(`[SENT] → ${r.phone}: ${r.title}`);
     } catch (err) {
       console.error(`[ERRO] ${r.phone}:`, err.message);
