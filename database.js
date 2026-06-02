@@ -1,20 +1,21 @@
-const Database = require('better-sqlite3');
-const path     = require('path');
-const fs       = require('fs');
+const sqlite3 = require('sqlite3').verbose();
+const path    = require('path');
+const fs      = require('fs');
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'data', 'assistente.db');
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
-const db = new Database(DB_PATH);
+const db = new sqlite3.Database(DB_PATH);
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS phones (
+// Inicializa tabelas
+db.serialize(() => {
+  db.run(`CREATE TABLE IF NOT EXISTS phones (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     phone      TEXT    NOT NULL UNIQUE,
     created_at TEXT    DEFAULT (datetime('now','localtime'))
-  );
+  )`);
 
-  CREATE TABLE IF NOT EXISTS reminders (
+  db.run(`CREATE TABLE IF NOT EXISTS reminders (
     id          TEXT    NOT NULL,
     phone       TEXT    NOT NULL,
     title       TEXT    NOT NULL,
@@ -27,49 +28,44 @@ db.exec(`
     sent        INTEGER DEFAULT 0,
     created_at  TEXT    DEFAULT (datetime('now','localtime')),
     PRIMARY KEY (id, phone)
-  );
-`);
+  )`);
+});
 
 function registerPhone(phone) {
-  db.prepare(`INSERT OR IGNORE INTO phones (phone) VALUES (?)`).run(phone);
+  db.run(`INSERT OR IGNORE INTO phones (phone) VALUES (?)`, [phone]);
 }
 
 function upsertReminder(phone, item) {
-  db.prepare(`
+  db.run(`
     INSERT INTO reminders (id, phone, title, note, cat, prio, date, time, valor, sent)
-    VALUES (@id, @phone, @title, @note, @cat, @prio, @date, @time, @valor, 0)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
     ON CONFLICT(id, phone) DO UPDATE SET
       title=excluded.title, note=excluded.note, cat=excluded.cat,
       prio=excluded.prio,   date=excluded.date, time=excluded.time,
       valor=excluded.valor, sent=0
-  `).run({
-    id:    String(item.id),
-    phone,
-    title: item.title,
-    note:  item.note  || null,
-    cat:   item.cat   || 'outro',
-    prio:  item.prio  || 'normal',
-    date:  item.date,
-    time:  item.time,
-    valor: item.valor || null,
-  });
+  `, [
+    String(item.id), phone, item.title, item.note || null,
+    item.cat || 'outro', item.prio || 'normal',
+    item.date, item.time, item.valor || null
+  ]);
 }
 
 function deleteReminder(phone, id) {
-  db.prepare(`DELETE FROM reminders WHERE phone=? AND id=?`).run(phone, String(id));
+  db.run(`DELETE FROM reminders WHERE phone=? AND id=?`, [phone, String(id)]);
 }
 
-// Retorna lembretes que devem ser enviados agora (date + time == agora, ainda não enviados)
 function getDueReminders(date, time) {
-  return db.prepare(`
-    SELECT * FROM reminders
-    WHERE date=? AND time=? AND sent=0
-    ORDER BY phone
-  `).all(date, time);
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT rowid, * FROM reminders WHERE date=? AND time=? AND sent=0 ORDER BY phone`,
+      [date, time],
+      (err, rows) => err ? reject(err) : resolve(rows || [])
+    );
+  });
 }
 
 function markSent(rowId) {
-  db.prepare(`UPDATE reminders SET sent=1 WHERE rowid=?`).run(rowId);
+  db.run(`UPDATE reminders SET sent=1 WHERE rowid=?`, [rowId]);
 }
 
 module.exports = { registerPhone, upsertReminder, deleteReminder, getDueReminders, markSent };
