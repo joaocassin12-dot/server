@@ -69,7 +69,7 @@ cron.schedule('* * * * *', async () => {
   const date  = toDateStr(now);
   const time  = toTimeStr(now);
 
-  const due = db.getDueReminders(date, time);
+  const due = await db.getDueReminders(date, time);
   if (!due.length) return;
 
   console.log(`[CRON] ${time} — ${due.length} lembrete(s) para enviar`);
