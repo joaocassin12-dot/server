@@ -1,69 +1,69 @@
-const fs   = require('fs');
-const path = require('path');
+const { MongoClient } = require('mongodb');
 
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
-const DB_FILE  = path.join(DATA_DIR, 'db.json');
+const uri = process.env.MONGODB_URI;
+let client, db;
 
-fs.mkdirSync(DATA_DIR, { recursive: true });
-
-function readDB() {
-  try {
-    return JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-  } catch(e) {
-    return { phones: [], reminders: [] };
-  }
+async function connect() {
+  if (db) return db;
+  client = new MongoClient(uri);
+  await client.connect();
+  db = client.db('assistente');
+  await db.collection('reminders').createIndex({ date: 1, time: 1, sent: 1 });
+  return db;
 }
 
-function writeDB(db) {
-  fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
+async function registerPhone(phone) {
+  const database = await connect();
+  await database.collection('phones').updateOne(
+    { phone },
+    { $set: { phone } },
+    { upsert: true }
+  );
 }
 
-function registerPhone(phone) {
-  const db = readDB();
-  if (!db.phones.includes(phone)) {
-    db.phones.push(phone);
-    writeDB(db);
-  }
-}
-
-function upsertReminder(phone, item) {
-  const db = readDB();
+async function upsertReminder(phone, item) {
+  const database = await connect();
   const key = `${phone}__${item.id}`;
-  const idx = db.reminders.findIndex(r => r._key === key);
-  const record = {
-    _key: key,
-    id:    String(item.id),
-    phone,
-    title: item.title,
-    note:  item.note  || null,
-    cat:   item.cat   || 'outro',
-    prio:  item.prio  || 'normal',
-    date:  item.date,
-    time:  item.time,
-    valor: item.valor || null,
-    sent:  false,
-  };
-  if (idx >= 0) db.reminders[idx] = record;
-  else db.reminders.push(record);
-  writeDB(db);
+  await database.collection('reminders').updateOne(
+    { _key: key },
+    {
+      $set: {
+        _key:  key,
+        id:    String(item.id),
+        phone,
+        title: item.title,
+        note:  item.note  || null,
+        cat:   item.cat   || 'outro',
+        prio:  item.prio  || 'normal',
+        date:  item.date,
+        time:  item.time,
+        valor: item.valor || null,
+        sent:  false,
+      }
+    },
+    { upsert: true }
+  );
 }
 
-function deleteReminder(phone, id) {
-  const db = readDB();
+async function deleteReminder(phone, id) {
+  const database = await connect();
   const key = `${phone}__${id}`;
-  db.reminders = db.reminders.filter(r => r._key !== key);
-  writeDB(db);
+  await database.collection('reminders').deleteOne({ _key: key });
 }
 
-function getDueReminders(date, time) {
-  const db = readDB();
-  return db.reminders.filter(r => r.date === date && r.time === time && !r.sent);
+async function getDueReminders(date, time) {
+  const database = await connect();
+  return database.collection('reminders')
+    .find({ date, time, sent: false })
+    .toArray();
 }
 
-function markSent(key) {
-  const db = readDB();
-  const r = db.reminders.find(r => r._key === key);
-  if (r) { r.sent = true; writeDB(db); }
+async function markSent(key) {
+  const database = await connect();
+  await database.collection('reminders').updateOne(
+    { _key: key },
+    { $set: { sent: true } }
+  );
 }
 
 module.exports = { registerPhone, upsertReminder, deleteReminder, getDueReminders, markSent };
