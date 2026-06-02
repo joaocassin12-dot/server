@@ -1,71 +1,69 @@
-const sqlite3 = require('sqlite3').verbose();
-const path    = require('path');
-const fs      = require('fs');
+const fs   = require('fs');
+const path = require('path');
 
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'data', 'assistente.db');
-fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+const DB_FILE  = path.join(DATA_DIR, 'db.json');
 
-const db = new sqlite3.Database(DB_PATH);
+fs.mkdirSync(DATA_DIR, { recursive: true });
 
-// Inicializa tabelas
-db.serialize(() => {
-  db.run(`CREATE TABLE IF NOT EXISTS phones (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    phone      TEXT    NOT NULL UNIQUE,
-    created_at TEXT    DEFAULT (datetime('now','localtime'))
-  )`);
+function readDB() {
+  try {
+    return JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+  } catch(e) {
+    return { phones: [], reminders: [] };
+  }
+}
 
-  db.run(`CREATE TABLE IF NOT EXISTS reminders (
-    id          TEXT    NOT NULL,
-    phone       TEXT    NOT NULL,
-    title       TEXT    NOT NULL,
-    note        TEXT,
-    cat         TEXT    DEFAULT 'outro',
-    prio        TEXT    DEFAULT 'normal',
-    date        TEXT    NOT NULL,
-    time        TEXT    NOT NULL,
-    valor       REAL,
-    sent        INTEGER DEFAULT 0,
-    created_at  TEXT    DEFAULT (datetime('now','localtime')),
-    PRIMARY KEY (id, phone)
-  )`);
-});
+function writeDB(db) {
+  fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
+}
 
 function registerPhone(phone) {
-  db.run(`INSERT OR IGNORE INTO phones (phone) VALUES (?)`, [phone]);
+  const db = readDB();
+  if (!db.phones.includes(phone)) {
+    db.phones.push(phone);
+    writeDB(db);
+  }
 }
 
 function upsertReminder(phone, item) {
-  db.run(`
-    INSERT INTO reminders (id, phone, title, note, cat, prio, date, time, valor, sent)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-    ON CONFLICT(id, phone) DO UPDATE SET
-      title=excluded.title, note=excluded.note, cat=excluded.cat,
-      prio=excluded.prio,   date=excluded.date, time=excluded.time,
-      valor=excluded.valor, sent=0
-  `, [
-    String(item.id), phone, item.title, item.note || null,
-    item.cat || 'outro', item.prio || 'normal',
-    item.date, item.time, item.valor || null
-  ]);
+  const db = readDB();
+  const key = `${phone}__${item.id}`;
+  const idx = db.reminders.findIndex(r => r._key === key);
+  const record = {
+    _key: key,
+    id:    String(item.id),
+    phone,
+    title: item.title,
+    note:  item.note  || null,
+    cat:   item.cat   || 'outro',
+    prio:  item.prio  || 'normal',
+    date:  item.date,
+    time:  item.time,
+    valor: item.valor || null,
+    sent:  false,
+  };
+  if (idx >= 0) db.reminders[idx] = record;
+  else db.reminders.push(record);
+  writeDB(db);
 }
 
 function deleteReminder(phone, id) {
-  db.run(`DELETE FROM reminders WHERE phone=? AND id=?`, [phone, String(id)]);
+  const db = readDB();
+  const key = `${phone}__${id}`;
+  db.reminders = db.reminders.filter(r => r._key !== key);
+  writeDB(db);
 }
 
 function getDueReminders(date, time) {
-  return new Promise((resolve, reject) => {
-    db.all(
-      `SELECT rowid, * FROM reminders WHERE date=? AND time=? AND sent=0 ORDER BY phone`,
-      [date, time],
-      (err, rows) => err ? reject(err) : resolve(rows || [])
-    );
-  });
+  const db = readDB();
+  return db.reminders.filter(r => r.date === date && r.time === time && !r.sent);
 }
 
-function markSent(rowId) {
-  db.run(`UPDATE reminders SET sent=1 WHERE rowid=?`, [rowId]);
+function markSent(key) {
+  const db = readDB();
+  const r = db.reminders.find(r => r._key === key);
+  if (r) { r.sent = true; writeDB(db); }
 }
 
 module.exports = { registerPhone, upsertReminder, deleteReminder, getDueReminders, markSent };
